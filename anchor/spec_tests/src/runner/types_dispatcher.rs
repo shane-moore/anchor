@@ -55,6 +55,11 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::PartialSigMsgSpecTest>(path, contents))
         }
 
+        // Proposer consensus data validation tests
+        "proposerconsensusdata.ProposerConsensusDataTest" => {
+            Some(run_test::<types::ProposerConsensusDataTest>(path, contents))
+        }
+
         // Encryption tests
         "encryption.EncryptionSpecTest" => {
             Some(run_test::<types::EncryptionSpecTest>(path, contents))
