@@ -105,6 +105,42 @@ pub fn deserialize_hash256_list_option<'de, D: serde::Deserializer<'de>>(
     }
 }
 
+/// Deserializes a base64-encoded string that may be `null` into `Option<Vec<u8>>`.
+///
+/// Error fixtures have `null` while success fixtures have a base64 string.
+pub fn deserialize_base64_or_null<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<u8>>, D::Error> {
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) => {
+            let bytes = STANDARD
+                .decode(s)
+                .map_err(|e| serde::de::Error::custom(format!("Failed to decode base64: {e}")))?;
+            Ok(Some(bytes))
+        }
+    }
+}
+
+/// Deserializes a hex string (without `0x` prefix) into `Hash256`.
+///
+/// The Go spec fixtures encode hash roots as 64-character hex strings representing 32 bytes.
+pub fn deserialize_hex_hash256<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Hash256, D::Error> {
+    let hex_str = String::deserialize(deserializer)?;
+    let bytes = hex::decode(&hex_str)
+        .map_err(|e| serde::de::Error::custom(format!("Failed to decode hex: {e}")))?;
+    if bytes.len() != 32 {
+        return Err(serde::de::Error::custom(format!(
+            "expected 32 bytes for Hash256, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(Hash256::from_slice(&bytes))
+}
+
 /// Deserializes a vector of hex strings into `Vec<MessageId>`.
 ///
 /// Each hex string is decoded to 56 bytes and converted to a `MessageId`.

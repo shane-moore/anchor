@@ -247,6 +247,22 @@ pub struct ProposerConsensusData {
     pub data_ssz: VariableList<u8, ProposerConsensusDataLen>,
 }
 
+impl ProposerConsensusData {
+    /// Decode the block data as a blinded beacon block.
+    pub fn get_blinded_block_data<E: EthSpec>(
+        &self,
+    ) -> Result<BlindedBeaconBlock<E>, DecodeError> {
+        let fork = ForkName::from(self.version);
+        BlindedBeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
+    }
+
+    /// Decode the block data as full block contents (block + blobs).
+    pub fn get_block_data<E: EthSpec>(&self) -> Result<FullBlockContents<E>, DecodeError> {
+        let fork = ForkName::from(self.version);
+        FullBlockContents::from_ssz_bytes_for_fork(&self.data_ssz, fork)
+    }
+}
+
 impl QbftData for ProposerConsensusData {
     type Hash = Hash256;
 

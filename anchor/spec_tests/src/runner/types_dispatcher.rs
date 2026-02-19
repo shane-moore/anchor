@@ -60,6 +60,11 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             Some(run_test::<types::ProposerConsensusDataTest>(path, contents))
         }
 
+        // Proposer block data extraction tests
+        "consensusdataproposer.ProposerSpecTest" => {
+            Some(run_test::<types::ConsensusDataProposerTest>(path, contents))
+        }
+
         // Encryption tests
         "encryption.EncryptionSpecTest" => {
             Some(run_test::<types::EncryptionSpecTest>(path, contents))

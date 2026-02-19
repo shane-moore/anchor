@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
 use serde::Deserialize;
-use ssv_types::consensus::{BeaconRole, BEACON_ROLE_PROPOSER};
-use ssz::{Decode, DecodeError, Encode};
+use ssv_types::consensus::{BEACON_ROLE_PROPOSER, BeaconRole};
+use ssz::{Decode, Encode};
 use types::{BlindedBeaconBlock, ForkName, MainnetEthSpec};
 
-use crate::SpecTest;
+use crate::{SpecTest, utils::is_bls_validation_error};
 
 /// Go error codes from ssv-spec `types/error.go` (iota + 1) relevant to
 /// `ProposerConsensusData.Validate()`.
@@ -105,16 +105,15 @@ impl ProposerConsensusDataTest {
     ///
     /// Go's validation order:
     /// 1. Check `Duty.Type == BNRoleProposer` -> `UnknownDutyRoleDataErrorCode` (10)
-    /// 2. Call `GetBlockData()` which:
-    ///    a. For known versions: try blinded then regular block -> `UnmarshalSSZErrorCode` (1)
-    ///    b. For unknown versions: -> `UnknownBlockVersionErrorCode` (11)
+    /// 2. Call `GetBlockData()` which: a. For known versions: try blinded then regular block ->
+    ///    `UnmarshalSSZErrorCode` (1) b. For unknown versions: -> `UnknownBlockVersionErrorCode`
+    ///    (11)
     fn validate(&self) -> Result<(), i64> {
         // Step 1: Check duty type.
         // `BeaconRole` has a private inner field, so we construct it via SSZ roundtrip.
-        let duty_role = BeaconRole::from_ssz_bytes(
-            &self.consensus_data.duty.duty_type.as_ssz_bytes(),
-        )
-        .map_err(|_| error_codes::UNKNOWN_DUTY_ROLE_DATA)?;
+        let duty_role =
+            BeaconRole::from_ssz_bytes(&self.consensus_data.duty.duty_type.as_ssz_bytes())
+                .map_err(|_| error_codes::UNKNOWN_DUTY_ROLE_DATA)?;
         if duty_role != BEACON_ROLE_PROPOSER {
             return Err(error_codes::UNKNOWN_DUTY_ROLE_DATA);
         }
@@ -163,19 +162,6 @@ impl ProposerConsensusDataTest {
         }
 
         Err(error_codes::UNMARSHAL_SSZ)
-    }
-}
-
-/// Returns `true` if the SSZ decode error is caused by BLS point validation failure.
-///
-/// Lighthouse validates BLS public keys and signatures during SSZ deserialization
-/// (point-on-curve check), while Go's `fastssz` treats them as opaque byte arrays.
-/// This function detects BLS-specific failures so we can accept SSZ data that is
-/// structurally valid but contains synthetic BLS values (as in the Go spec fixtures).
-fn is_bls_validation_error(err: &DecodeError) -> bool {
-    match err {
-        DecodeError::BytesInvalid(msg) => msg.contains("BLST"),
-        _ => false,
     }
 }
 
