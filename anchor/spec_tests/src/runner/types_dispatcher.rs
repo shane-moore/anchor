@@ -70,6 +70,14 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::EncryptionSpecTest>(path, contents))
         }
 
+        // Duty role mapping tests
+        "duty.DutySpecTest" => Some(run_test::<types::DutySpecTest>(path, contents)),
+
+        // Deposit data signing root tests
+        "beacon.DepositDataSpecTest" => {
+            Some(run_test::<types::BeaconDepositDataSpecTest>(path, contents))
+        }
+
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.
         _ => {

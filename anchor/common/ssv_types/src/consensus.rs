@@ -456,9 +456,15 @@ pub struct ValidatorDuty {
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
+
+impl From<u64> for BeaconRole {
+    fn from(value: u64) -> Self {
+        BeaconRole(value)
+    }
+}
 
 pub const BEACON_ROLE_ATTESTER: BeaconRole = BeaconRole(0);
 pub const BEACON_ROLE_AGGREGATOR: BeaconRole = BeaconRole(1);
