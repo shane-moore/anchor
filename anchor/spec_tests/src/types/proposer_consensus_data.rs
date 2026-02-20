@@ -30,23 +30,6 @@ mod error_codes {
 struct TestDuty {
     #[serde(rename = "Type")]
     duty_type: u64,
-    #[serde(rename = "PubKey")]
-    #[expect(dead_code)]
-    pub_key: String,
-    #[expect(dead_code)]
-    slot: String,
-    #[expect(dead_code)]
-    validator_index: String,
-    #[expect(dead_code)]
-    committee_index: u64,
-    #[expect(dead_code)]
-    committee_length: u64,
-    #[expect(dead_code)]
-    committees_at_slot: u64,
-    #[expect(dead_code)]
-    validator_committee_index: u64,
-    #[expect(dead_code)]
-    validator_sync_committee_indices: Option<Vec<u64>>,
 }
 
 /// Intermediate struct for deserializing `ProposerConsensusData` from JSON.
