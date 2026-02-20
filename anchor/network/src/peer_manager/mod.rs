@@ -5,7 +5,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
-use fork::SharedForkLifecycle;
+use fork::Fork;
 use libp2p::{
     Multiaddr,
     core::{Endpoint, transport::PortUse},
@@ -73,11 +73,11 @@ impl PeerManager {
     /// # Arguments
     /// * `config` - Network configuration (may contain user-provided target_peers)
     /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
-    /// * `fork_lifecycle` - Shared fork lifecycle for fork-aware peer selection
+    /// * `initial_fork` - The current active fork at startup
     pub fn new(
         config: &Config,
         one_epoch_duration: Duration,
-        fork_lifecycle: SharedForkLifecycle,
+        initial_fork: Fork,
     ) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
@@ -87,7 +87,7 @@ impl PeerManager {
         // subnet_service.
         let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
 
-        let connection_manager = ConnectionManager::new(target_peers, fork_lifecycle);
+        let connection_manager = ConnectionManager::new(target_peers, initial_fork);
         let heartbeat_manager = HeartbeatManager::new();
         let blocking_manager = BlockingManager::new(one_epoch_duration);
 
@@ -209,6 +209,11 @@ impl PeerManager {
     /// Get the set of subnets we need peers for
     pub fn needed_subnets(&self) -> &HashSet<SubnetId> {
         &self.needed_subnets
+    }
+
+    /// Forward a fork phase event to the connection manager.
+    pub fn on_fork_phase(&mut self, phase: &fork::ForkPhase) {
+        self.connection_manager.on_fork_phase(phase);
     }
 
     /// Update observed gossipsub subscription state for a peer on a specific fork.

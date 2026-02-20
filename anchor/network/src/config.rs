@@ -4,6 +4,7 @@ use std::{
 };
 
 use discv5::Enr;
+use fork::Fork;
 use global_config::data_dir::NetworkDir;
 use libp2p::Multiaddr;
 use network_utils::listen_addr::{ListenAddr, ListenAddress};
@@ -85,6 +86,10 @@ pub struct Config {
     pub upnp_enabled: bool,
 
     pub domain_type: DomainType,
+
+    /// The initial active fork at startup. Used by ConnectionManager for fork-aware
+    /// peer selection.
+    pub initial_fork: Fork,
 }
 
 impl Config {
@@ -116,6 +121,7 @@ impl Config {
             disable_quic_support: false,
             subscribe_all_subnets: false,
             domain_type: DomainType::default(),
+            initial_fork: Fork::Alan,
             upnp_enabled: true,
         }
     }

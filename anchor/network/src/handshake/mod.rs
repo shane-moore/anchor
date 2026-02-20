@@ -8,7 +8,6 @@ use std::{
 };
 
 use discv5::libp2p_identity::Keypair;
-use fork::SharedForkLifecycle;
 use libp2p::{
     PeerId, StreamProtocol,
     request_response::{
@@ -38,7 +37,7 @@ pub enum Event {
 /// Automatically initiates handshakes on outbound connections.
 pub struct Behaviour {
     inner: RequestResponseBehaviour<Codec>,
-    fork_lifecycle: SharedForkLifecycle,
+    domain_type: ssv_types::domain_type::DomainType,
     metadata: node_info::NodeMetadata,
     events: VecDeque<Event>,
 }
@@ -60,7 +59,7 @@ impl Behaviour {
     /// The behaviour automatically initiates handshakes on outbound connections.
     pub fn new(
         keypair: Keypair,
-        fork_lifecycle: SharedForkLifecycle,
+        domain_type: ssv_types::domain_type::DomainType,
         metadata: node_info::NodeMetadata,
     ) -> Self {
         let protocol = StreamProtocol::new("/ssv/info/0.0.1");
@@ -71,16 +70,21 @@ impl Behaviour {
         );
         Self {
             inner,
-            fork_lifecycle,
+            domain_type,
             metadata,
             events: VecDeque::new(),
         }
     }
 
-    /// Construct our [`NodeInfo`] from the current shared domain type and metadata.
+    /// Update the domain type. Called by Network on fork activation.
+    pub fn update_domain_type(&mut self, domain_type: ssv_types::domain_type::DomainType) {
+        self.domain_type = domain_type;
+    }
+
+    /// Construct our [`NodeInfo`] from the current domain type and metadata.
     fn our_node_info(&self) -> NodeInfo {
         NodeInfo {
-            domain_type: self.fork_lifecycle.domain_type().into(),
+            domain_type: self.domain_type.into(),
             metadata: Some(self.metadata.clone()),
         }
     }
@@ -348,7 +352,6 @@ mod tests {
     use std::sync::LazyLock;
 
     use discv5::libp2p_identity::Keypair;
-    use fork::{Fork, ForkLifecycle, SharedForkLifecycle};
     use libp2p::swarm::Swarm;
     use libp2p_swarm_test::{SwarmExt, drive};
     use ssv_types::domain_type::DomainType;
@@ -358,13 +361,6 @@ mod tests {
 
     const DOMAIN_A: DomainType = DomainType([0, 0, 0, 1]);
     const DOMAIN_B: DomainType = DomainType([0, 0, 0, 2]);
-
-    fn lifecycle_normal(domain_type: DomainType) -> SharedForkLifecycle {
-        SharedForkLifecycle::new(ForkLifecycle::Normal {
-            current: Fork::Alan,
-            domain_type,
-        })
-    }
 
     fn test_metadata(version: &str) -> NodeMetadata {
         NodeMetadata {
@@ -380,9 +376,8 @@ mod tests {
         domain_type: DomainType,
         version: &str,
     ) -> Swarm<Behaviour> {
-        let shared = lifecycle_normal(domain_type);
         let metadata = test_metadata(version);
-        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, shared, metadata))
+        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, domain_type, metadata))
     }
 
     fn assert_completed(event: Event, expected_peer: PeerId, expected_version: &str) {
@@ -521,25 +516,16 @@ mod tests {
         .expect("test completed");
     }
 
-    fn create_test_swarm_with_shared_lifecycle(
-        keypair: Keypair,
-        shared: SharedForkLifecycle,
-        version: &str,
-    ) -> Swarm<Behaviour> {
-        let metadata = test_metadata(version);
-        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, shared, metadata))
-    }
-
-    /// Tests that updates to `SharedForkLifecycle` propagate to subsequent handshakes.
+    /// Tests that `update_domain_type` propagates to subsequent handshakes.
     ///
-    /// This validates the core fix from PR #814: when a fork activates and updates the
-    /// shared fork lifecycle, all future handshakes use the new domain type. The test
+    /// This validates the core fix from PR #814: when a fork activates and the
+    /// domain type is updated, all future handshakes use the new domain type. The test
     /// runs through three phases:
     /// 1. Both peers on DOMAIN_A - handshake succeeds
     /// 2. Only local updates to DOMAIN_B - handshake fails with NetworkMismatch
     /// 3. Both peers update to DOMAIN_B - handshake succeeds again
     #[tokio::test]
-    async fn shared_fork_lifecycle_updates_propagate_to_handshakes() {
+    async fn domain_type_updates_propagate_to_handshakes() {
         use futures::future::Either;
         use libp2p::swarm::SwarmEvent;
 
@@ -548,20 +534,11 @@ mod tests {
         let domain_a_hex: String = DOMAIN_A.into();
         let domain_b_hex: String = DOMAIN_B.into();
 
-        // Arrange: Create SharedForkLifecycle instances externally so we can update them
-        let local_shared = lifecycle_normal(DOMAIN_A);
-        let remote_shared = lifecycle_normal(DOMAIN_A);
-
         let local_keypair = Keypair::generate_ed25519();
         let remote_keypair = Keypair::generate_ed25519();
 
-        let mut local_swarm =
-            create_test_swarm_with_shared_lifecycle(local_keypair, local_shared.clone(), "local");
-        let mut remote_swarm = create_test_swarm_with_shared_lifecycle(
-            remote_keypair,
-            remote_shared.clone(),
-            "remote",
-        );
+        let mut local_swarm = create_test_swarm(local_keypair, DOMAIN_A, "local");
+        let mut remote_swarm = create_test_swarm(remote_keypair, DOMAIN_A, "remote");
 
         tokio::spawn(async move {
             // ==================== Phase 1: Both on DOMAIN_A - handshake succeeds
@@ -580,11 +557,8 @@ mod tests {
             // ==================== Phase 2: Only local updates to DOMAIN_B - mismatch
             // ====================
 
-            // Act: Update only the local shared fork lifecycle (simulates fork activation)
-            local_shared.set(ForkLifecycle::Normal {
-                current: Fork::Boole,
-                domain_type: DOMAIN_B,
-            });
+            // Act: Update only the local domain type (simulates fork activation)
+            local_swarm.behaviour_mut().update_domain_type(DOMAIN_B);
 
             // Disconnect both peers
             let remote_peer = *remote_swarm.local_peer_id();
@@ -632,11 +606,8 @@ mod tests {
             // ==================== Phase 3: Both update to DOMAIN_B - handshake succeeds
             // ====================
 
-            // Act: Update remote's shared fork lifecycle to match
-            remote_shared.set(ForkLifecycle::Normal {
-                current: Fork::Boole,
-                domain_type: DOMAIN_B,
-            });
+            // Act: Update remote's domain type to match
+            remote_swarm.behaviour_mut().update_domain_type(DOMAIN_B);
 
             // Disconnect both peers again
             local_swarm

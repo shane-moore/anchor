@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use fork::SharedForkLifecycle;
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
@@ -99,7 +98,6 @@ impl<R: MessageReceiver> Network<R> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
         fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
-        fork_lifecycle: SharedForkLifecycle,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -116,7 +114,8 @@ impl<R: MessageReceiver> Network<R> {
             config,
             &mut metrics_registry,
             &spec,
-            fork_lifecycle,
+            config.domain_type,
+            config.initial_fork,
         )
         .await
         .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
@@ -425,16 +424,24 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Handle fork phase transition events.
     ///
-    /// Domain type updates are handled by `SharedForkLifecycle` (updated by ForkMonitor).
-    /// This method only handles ENR updates that require direct discv5 interaction.
+    /// Dispatches to each component that needs fork awareness:
+    /// - ConnectionManager: tracks current_fork and in_transition for subnet bitmap aggregation
+    /// - Discovery: updates domain type for ENR and query predicates
+    /// - Handshake: updates domain type for network mismatch checks
+    ///
+    /// NOTE: When adding new fork-aware components, add dispatch here.
     fn on_fork_phase(&mut self, phase: ForkPhase) {
-        if let ForkPhase::Activated { current, .. } = phase {
-            info!(current_fork = %current.fork, "Fork activated, updating ENR");
+        // Connection manager handles all three phases
+        self.peer_manager().on_fork_phase(&phase);
 
-            // Update ENR so other nodes can discover us with the new fork's domain
+        // Discovery and handshake only need updates on activation
+        if let ForkPhase::Activated { current, .. } = phase {
+            info!(current_fork = %current.fork, "Fork activated, updating ENR and handshake");
+
             if let Err(e) = self.discovery().update_enr_domain_type(current.domain_type) {
                 error!(?e, "Failed to update ENR domain type after fork activation");
             }
+            self.handshake().update_domain_type(current.domain_type);
         }
     }
 

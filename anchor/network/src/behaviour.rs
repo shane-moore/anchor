@@ -1,7 +1,8 @@
 use std::{hash::Hasher, time::Duration};
 
-use fork::SharedForkLifecycle;
+use fork::Fork;
 use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
+use ssv_types::domain_type::DomainType;
 use libp2p::{
     identify, ping,
     swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
@@ -93,7 +94,8 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
-        fork_lifecycle: SharedForkLifecycle,
+        initial_domain_type: DomainType,
+        initial_fork: Fork,
     ) -> Result<Self, BehaviourError> {
         let identify = {
             let local_public_key = local_keypair.public();
@@ -160,7 +162,7 @@ impl AnchorBehaviour {
             let mut discovery = Discovery::new(
                 local_keypair.clone(),
                 network_config,
-                fork_lifecycle.clone(),
+                initial_domain_type,
             )
             .await?;
             // start searching for peers
@@ -172,7 +174,7 @@ impl AnchorBehaviour {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
-            PeerManager::new(network_config, one_epoch_duration, fork_lifecycle.clone())
+            PeerManager::new(network_config, one_epoch_duration, initial_fork)
         };
 
         let handshake = {
@@ -182,7 +184,7 @@ impl AnchorBehaviour {
                 consensus_node: "lighthouse/v1.5.0".to_string(),
                 subnets: "00000000000000000000000000000000".to_string(),
             };
-            handshake::Behaviour::new(local_keypair, fork_lifecycle, metadata)
+            handshake::Behaviour::new(local_keypair, initial_domain_type, metadata)
         };
 
         let upnp = Toggle::from(

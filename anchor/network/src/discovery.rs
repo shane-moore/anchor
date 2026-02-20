@@ -15,7 +15,6 @@ use discv5::{
     libp2p_identity::{Keypair, PeerId},
     multiaddr::Multiaddr,
 };
-use fork::SharedForkLifecycle;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use libp2p::{
     bytes::Bytes,
@@ -153,7 +152,7 @@ pub struct Discovery {
     /// been started
     update_ports: UpdatePorts,
 
-    fork_lifecycle: SharedForkLifecycle,
+    current_domain_type: DomainType,
 
     enr_file_path: PathBuf,
 }
@@ -162,7 +161,7 @@ impl Discovery {
     pub async fn new(
         local_keypair: Keypair,
         network_config: &Config,
-        fork_lifecycle: SharedForkLifecycle,
+        initial_domain_type: DomainType,
     ) -> Result<Self, DiscoveryError> {
         let protocol_identity = ProtocolIdentity {
             protocol_id: *b"ssvdv5",
@@ -308,7 +307,7 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            fork_lifecycle,
+            current_domain_type: initial_domain_type,
             update_ports,
             enr_file_path,
         })
@@ -414,11 +413,11 @@ impl Discovery {
         Ok(true)
     }
 
-    /// Update the ENR domain type so other nodes can discover us with the new fork's domain.
+    /// Update domain type for both discovery query predicates and ENR.
     ///
-    /// Called when a fork activates. The shared domain type is updated separately;
-    /// this method only handles the ENR update and disk persistence.
+    /// Called by Network when a fork activates.
     pub fn update_enr_domain_type(&mut self, new_domain_type: DomainType) -> Result<(), String> {
+        self.current_domain_type = new_domain_type;
         self.discv5
             .enr_insert("domaintype", &new_domain_type.0)
             .map_err(|e| format!("Failed to update ENR domain type: {e:?}"))?;
@@ -448,13 +447,13 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
-        // Clone the shared fork lifecycle so the closure can read the current domain type at query
-        // time.
-        let shared_lifecycle = self.fork_lifecycle.clone();
+        // Capture the current domain type by value so the closure uses the domain type
+        // at query-start time.
+        let expected_domain_type = self.current_domain_type;
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
-                shared_lifecycle.domain_type().0 == domain_type
+                expected_domain_type.0 == domain_type
             } else {
                 trace!(?enr, "Rejecting ENR with missing domaintype");
                 false

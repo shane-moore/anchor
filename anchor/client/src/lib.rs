@@ -351,8 +351,9 @@ impl Client {
         // Get the initial fork config for the current active fork
         let initial_fork_config = fork_schedule.active_fork_config(current_epoch);
 
-        // Ensure network domain type matches the active fork at startup (needed for handshake/ENR)
+        // Ensure network config matches the active fork at startup (needed for handshake/ENR/peer selection)
         config.network.domain_type = initial_fork_config.domain_type;
+        config.network.initial_fork = initial_fork_config.fork;
 
         // Get network name for database isolation (stable across forks)
         let network_name = config.global_config.ssv_network.network_name.as_str();
@@ -378,12 +379,6 @@ impl Client {
         // Create fork phase channel for fork transition events
         let (fork_phase_tx, fork_phase_rx) = async_broadcast::broadcast(16);
 
-        // Create shared fork lifecycle state for cross-component fork awareness
-        let fork_lifecycle = fork::SharedForkLifecycle::new(fork::ForkLifecycle::Normal {
-            current: initial_fork_config.fork,
-            domain_type: initial_fork_config.domain_type,
-        });
-
         // Start fork monitor to log fork transitions and send ForkPhase events
         fork::monitor::spawn(
             fork_schedule.clone(),
@@ -392,7 +387,6 @@ impl Client {
             spec.seconds_per_slot,
             executor.clone(),
             fork_phase_tx,
-            fork_lifecycle.clone(),
         );
 
         // Start validator index syncer
@@ -559,7 +553,6 @@ impl Client {
             executor.clone(),
             spec.clone(),
             fork_phase_rx,
-            fork_lifecycle,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
