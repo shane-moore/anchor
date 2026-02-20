@@ -78,6 +78,9 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             Some(run_test::<types::BeaconDepositDataSpecTest>(path, contents))
         }
 
+        // SSZ merkleization tests
+        "ssz.SSZSpecTest" => Some(run_test::<types::SSZSpecTest>(path, contents)),
+
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.
         _ => {

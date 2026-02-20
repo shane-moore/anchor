@@ -18,15 +18,11 @@ const MAX_EFFECTIVE_BALANCE_GWEI: u64 = 32_000_000_000;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct BeaconDepositDataSpecTest {
-    #[expect(dead_code)]
-    name: String,
     #[serde(rename = "ValidatorPK")]
     validator_pk: String,
     withdrawal_credentials: String,
     fork_version: String,
     expected_signing_root: String,
-    #[expect(dead_code)]
-    domain: String,
 }
 
 impl SpecTest for BeaconDepositDataSpecTest {
