@@ -1,6 +1,7 @@
 mod aggregator_committee_consensus_data_encoding;
 mod beacon_deposit_data;
 mod beacon_vote_encoding;
+mod committee_member;
 mod consensus_data_proposer;
 mod duty;
 mod encryption;
@@ -17,6 +18,7 @@ mod ssz_spec_test;
 pub use aggregator_committee_consensus_data_encoding::*;
 pub use beacon_deposit_data::*;
 pub use beacon_vote_encoding::*;
+pub use committee_member::*;
 pub use consensus_data_proposer::*;
 pub use duty::*;
 pub use encryption::*;
