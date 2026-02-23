@@ -3,30 +3,13 @@ use std::collections::HashSet;
 use serde::Deserialize;
 use ssv_types::{
     OperatorId,
-    message::{SSVMessage, SignedSSVMessage, SignedSSVMessageError},
+    message::{SignedSSVMessage, SignedSSVMessageError},
 };
 
-use crate::{SpecTest, utils::deserializers::deserialize_base64_list, utils::error_codes};
-
-/// Intermediate struct for the signed message from the fixture.
-///
-/// Reuses the same pattern as `TestSignedSSVMessage` in `signed_ssv_msg.rs`.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct TestSignedSSVMessage {
-    #[serde(deserialize_with = "deserialize_base64_list")]
-    signatures: Vec<Vec<u8>>,
-    #[serde(rename = "OperatorIDs")]
-    operator_ids: Vec<OperatorId>,
-    #[serde(rename = "SSVMessage")]
-    ssv_message: Option<SSVMessage>,
-    #[serde(
-        rename = "FullData",
-        deserialize_with = "crate::utils::deserializers::deserialize_base64_or_null",
-        default
-    )]
-    full_data: Option<Vec<u8>>,
-}
+use crate::{
+    SpecTest,
+    utils::{TestSignedSSVMessage, error_codes, pad_signature_256},
+};
 
 /// Committee member fields — only `FaultyNodes` and `Committee.len()` are used.
 #[derive(Debug, Deserialize)]
@@ -132,16 +115,10 @@ impl CommitteeMemberTest {
             .as_ref()
             .ok_or(SignedSSVMessageError::NoSigners)?;
 
-        // Pad signatures to [u8; 256]
         let signatures: Vec<[u8; 256]> = msg
             .signatures
             .iter()
-            .map(|sig| {
-                let mut arr = [0u8; 256];
-                let len = sig.len().min(256);
-                arr[..len].copy_from_slice(&sig[..len]);
-                arr
-            })
+            .map(|sig| pad_signature_256(sig))
             .collect();
 
         SignedSSVMessage::new(

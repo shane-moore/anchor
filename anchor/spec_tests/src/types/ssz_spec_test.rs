@@ -4,10 +4,7 @@ use types::{ExecPayload, Hash256, MainnetEthSpec};
 
 use crate::{
     SpecTest,
-    utils::{
-        deserializers::{deserialize_base64, deserialize_hex_hash256},
-        is_bls_validation_error,
-    },
+    utils::{deserializers::deserialize_base64, is_bls_validation_error},
 };
 
 /// Mirrors Go's `SSZSpecTest.Run()`. Verifies withdrawals `HashTreeRoot`.
@@ -19,7 +16,7 @@ use crate::{
 pub struct SSZSpecTest {
     #[serde(deserialize_with = "deserialize_base64")]
     data: Vec<u8>,
-    #[serde(deserialize_with = "deserialize_hex_hash256")]
+    #[serde(deserialize_with = "ssv_types::deserializers::deserialize_hash256")]
     expected_root: Hash256,
 }
 

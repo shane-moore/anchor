@@ -28,28 +28,6 @@ pub fn deserialize_base64_list<'de, D: serde::Deserializer<'de>>(
         .collect()
 }
 
-/// Deserializes an optional vector of base64 strings into `Option<Vec<Vec<u8>>>`.
-#[expect(dead_code)]
-pub fn deserialize_base64_list_option<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Vec<Vec<u8>>>, D::Error> {
-    let opt: Option<Vec<String>> = Option::deserialize(deserializer)?;
-    match opt {
-        None => Ok(None),
-        Some(strings) => {
-            let result: Result<Vec<Vec<u8>>, _> = strings
-                .into_iter()
-                .map(|s| {
-                    STANDARD.decode(&s).map_err(|e| {
-                        serde::de::Error::custom(format!("Failed to decode base64: {e}"))
-                    })
-                })
-                .collect();
-            result.map(Some)
-        }
-    }
-}
-
 /// Deserializes an optional hex string (with or without `0x` prefix) into `Option<Vec<u8>>`.
 pub fn deserialize_hex_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,

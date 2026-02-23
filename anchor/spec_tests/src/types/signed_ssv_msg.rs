@@ -1,36 +1,12 @@
 use openssl::{hash::MessageDigest, pkey::PKey, sign::Verifier};
 use serde::Deserialize;
-use ssv_types::{
-    OperatorId,
-    message::{SSVMessage, SignedSSVMessage, SignedSSVMessageError},
-};
+use ssv_types::message::{SSVMessage, SignedSSVMessage, SignedSSVMessageError};
 use ssz::Encode;
 
 use crate::{
     SpecTest,
-    utils::{deserializers::deserialize_base64_list, error_codes},
+    utils::{TestSignedSSVMessage, error_codes, pad_signature_256},
 };
-
-/// Intermediate struct for a single signed message from the fixture.
-///
-/// `SSVMessage` is `Option` because Go uses a pointer (can be null in error fixtures).
-/// `SSVMessage` deserialization is handled by the feature-gated serde support in `ssv_types`.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct TestSignedSSVMessage {
-    #[serde(deserialize_with = "deserialize_base64_list")]
-    signatures: Vec<Vec<u8>>,
-    #[serde(rename = "OperatorIDs")]
-    operator_ids: Vec<OperatorId>,
-    #[serde(rename = "SSVMessage")]
-    ssv_message: Option<SSVMessage>,
-    #[serde(
-        rename = "FullData",
-        deserialize_with = "crate::utils::deserializers::deserialize_hex_option",
-        default
-    )]
-    full_data: Option<Vec<u8>>,
-}
 
 /// Top-level test fixture for `SignedSSVMessageTest`.
 ///
@@ -88,7 +64,7 @@ impl SignedSSVMessageTest {
             .ok_or(error_codes::NIL_SSV_MESSAGE)?;
 
         // Pad signatures to [u8; 256] for Anchor's type requirement
-        let signatures = Self::prepare_signatures(&msg.signatures)?;
+        let signatures = Self::prepare_signatures(&msg.signatures);
 
         // Use Anchor's actual validation via SignedSSVMessage::new()
         let signed_msg = SignedSSVMessage::new(
@@ -103,21 +79,10 @@ impl SignedSSVMessageTest {
         self.verify_rsa_signatures(&signed_msg, ssv_message)
     }
 
-    /// Pad or truncate variable-length signatures to `[u8; 256]` arrays for Anchor's type.
-    ///
-    /// Returns `Err` if any signature exceeds 256 bytes, since truncation would silently
-    /// alter the signature data.
-    fn prepare_signatures(signatures: &[Vec<u8>]) -> Result<Vec<[u8; 256]>, i64> {
+    fn prepare_signatures(signatures: &[Vec<u8>]) -> Vec<[u8; 256]> {
         signatures
             .iter()
-            .map(|sig| {
-                if sig.len() > 256 {
-                    return Err(error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE);
-                }
-                let mut arr = [0u8; 256];
-                arr[..sig.len()].copy_from_slice(sig);
-                Ok(arr)
-            })
+            .map(|sig| pad_signature_256(sig))
             .collect()
     }
 

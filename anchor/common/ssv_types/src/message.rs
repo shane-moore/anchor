@@ -196,7 +196,7 @@ pub struct SSVMessage {
     msg_id: MessageId,
     #[cfg_attr(
         feature = "serde",
-        serde(rename = "Data", deserialize_with = "deserialize_base64_message_data")
+        serde(rename = "Data", deserialize_with = "deserialize_base64_variable_list")
     )]
     data: VariableList<u8, SSVMessageDataLen>,
 }
@@ -369,7 +369,7 @@ pub enum SignedSSVMessageError {
 /// SignedSSVMessage.FullData max size: 8388836 (from Go spec)
 /// 8388836 = 8000000 + 388836 = 8 * 1000000 + 388836
 /// We need to construct 388836 = 388 * 1000 + 836 = 388000 + 836
-type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
+pub type SSVMessageFullDataLen = Sum<Prod<U8, U1000000>, Sum<Prod<U388, U1000>, U836>>;
 
 /// Maximum of 13 signatures.
 pub type SignatureList = VariableList<VariableList<u8, U256>, U13>;

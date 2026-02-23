@@ -90,6 +90,11 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::CommitteeMemberTest>(path, contents))
         }
 
+        // Structure size tests
+        "maxmsgsize.StructureSizeTest" => {
+            DispatchOutcome::Executed(run_test::<types::StructureSizeTest>(path, contents))
+        }
+
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.
         _ => {

@@ -28,6 +28,8 @@ use types::{
     ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
+#[cfg(feature = "serde")]
+use crate::deserializers::*;
 use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
 //                          UnsignedSSVMessage
 //            ----------------------------------------------
@@ -105,18 +107,40 @@ pub struct UnsignedSSVMessage {
 /// A QBFT specific message
 #[derive(Debug, Clone, Encode, Decode, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "PascalCase"))]
 pub struct QbftMessage {
+    #[cfg_attr(feature = "serde", serde(rename = "MsgType"))]
     pub qbft_message_type: QbftMessageType,
     pub height: u64,
     pub round: u64,
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_base64_variable_list")
+    )]
     pub identifier: VariableList<u8, U56>, /* TODO: address redundant typing due to ssz_max
                                             * encoding in go-client */
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_hash256"))]
     pub root: Hash256,
     pub data_round: u64,
     // always without full data
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            deserialize_with = "deserialize_optional_base64_nested_variable_list",
+            default
+        )
+    )]
     pub round_change_justification:
         VariableList<VariableList<u8, RoundChangeJustificationLength>, U13>,
     // always without full data
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            deserialize_with = "deserialize_optional_base64_nested_variable_list",
+            default
+        )
+    )]
     pub prepare_justification: VariableList<VariableList<u8, PrepareJustificationLength>, U13>,
 }
 
@@ -240,10 +264,35 @@ impl TreeHash for QbftMessageType {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for QbftMessageType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = u64::deserialize(deserializer)?;
+        match value {
+            0 => Ok(QbftMessageType::Proposal),
+            1 => Ok(QbftMessageType::Prepare),
+            2 => Ok(QbftMessageType::Commit),
+            3 => Ok(QbftMessageType::RoundChange),
+            _ => Err(serde::de::Error::custom(format!(
+                "unknown QbftMessageType: {value}"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "PascalCase"))]
 pub struct ProposerConsensusData {
     pub duty: ValidatorDuty,
     pub version: DataVersion,
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            rename = "DataSSZ",
+            deserialize_with = "deserialize_base64_variable_list"
+        )
+    )]
     pub data_ssz: VariableList<u8, ProposerConsensusDataLen>,
 }
 
@@ -444,15 +493,31 @@ impl From<DecodeError> for DataValidationError {
 }
 
 #[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "PascalCase"))]
 pub struct ValidatorDuty {
+    #[cfg_attr(feature = "serde", serde(rename = "Type"))]
     pub r#type: BeaconRole,
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "PubKey", deserialize_with = "deserialize_public_key_bytes")
+    )]
     pub pub_key: PublicKeyBytes,
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_slot"))]
     pub slot: Slot,
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_validator_index")
+    )]
     pub validator_index: ValidatorIndex,
     pub committee_index: CommitteeIndex,
     pub committee_length: u64,
     pub committees_at_slot: u64,
     pub validator_committee_index: u64,
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_optional_variable_list", default)
+    )]
     pub validator_sync_committee_indices: VariableList<u64, U13>,
 }
 
@@ -468,6 +533,14 @@ pub const BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION: BeaconRole = BeaconRole(4);
 pub const BEACON_ROLE_VALIDATOR_REGISTRATION: BeaconRole = BeaconRole(5);
 pub const BEACON_ROLE_VOLUNTARY_EXIT: BeaconRole = BeaconRole(6);
 pub const BEACON_ROLE_UNKNOWN: BeaconRole = BeaconRole(u64::MAX);
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for BeaconRole {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = u64::deserialize(deserializer)?;
+        Ok(BeaconRole(value))
+    }
+}
 
 impl TreeHash for BeaconRole {
     fn tree_hash_type() -> TreeHashType {
@@ -492,10 +565,17 @@ impl TreeHash for BeaconRole {
 /// Used in `AggregatorCommitteeConsensusData` to track which validators
 /// have been selected as aggregators for attestation or sync committee duties.
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "PascalCase"))]
 pub struct AssignedAggregator {
     /// The validator's beacon chain index
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_validator_index")
+    )]
     pub validator_index: ValidatorIndex,
     /// The selection proof signature (96 bytes) proving aggregator eligibility
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_signature"))]
     pub selection_proof: Signature,
     /// Index identifying the duty context. The semantic meaning depends on usage:
     /// - For attestation aggregators: the beacon committee index (0-63)
@@ -803,6 +883,17 @@ impl Decode for DataVersion {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for DataVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use std::str::FromStr;
+        let s = String::deserialize(deserializer)?;
+        let fork_name = ForkName::from_str(&s)
+            .map_err(|_| serde::de::Error::custom(format!("unknown fork: {s}")))?;
+        Ok(DataVersion::from(fork_name))
+    }
+}
+
 impl TreeHash for DataVersion {
     fn tree_hash_type() -> TreeHashType {
         TreeHashType::Basic
@@ -887,9 +978,14 @@ pub type Contributions<E> = VariableList<ContributionWrapper<E>, U13>;
 
 #[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "PascalCase"))]
 pub struct BeaconVote {
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_hash256"))]
     pub block_root: Hash256,
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_checkpoint"))]
     pub source: Checkpoint,
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_checkpoint"))]
     pub target: Checkpoint,
 }
 

@@ -6,7 +6,7 @@ use types::{Hash256, MainnetEthSpec};
 use crate::{
     SpecTest,
     utils::{
-        deserializers::{deserialize_base64, deserialize_base64_or_null, deserialize_hex_hash256},
+        deserializers::{deserialize_base64, deserialize_base64_or_null},
         error_codes, is_bls_validation_error,
     },
 };
@@ -27,10 +27,10 @@ pub struct ConsensusDataProposerTest {
 
     blinded: bool,
 
-    #[serde(deserialize_with = "deserialize_hex_hash256")]
+    #[serde(deserialize_with = "ssv_types::deserializers::deserialize_hash256")]
     expected_blk_root: Hash256,
 
-    #[serde(deserialize_with = "deserialize_hex_hash256")]
+    #[serde(deserialize_with = "ssv_types::deserializers::deserialize_hash256")]
     expected_cd_root: Hash256,
 
     expected_error_code: i64,
@@ -154,7 +154,6 @@ impl ConsensusDataProposerTest {
             })),
             Err(blinded_err) => match cd.get_block_data::<MainnetEthSpec>() {
                 Ok(full) => {
-                    // Go returns `BeaconBlock`, not `FullBlockContents`.
                     let block = full.block();
                     Ok(BlockExtractionResult::Decoded(BlockData {
                         is_blinded: false,
