@@ -249,9 +249,7 @@ pub struct ProposerConsensusData {
 
 impl ProposerConsensusData {
     /// Decode the block data as a blinded beacon block.
-    pub fn get_blinded_block_data<E: EthSpec>(
-        &self,
-    ) -> Result<BlindedBeaconBlock<E>, DecodeError> {
+    pub fn get_blinded_block_data<E: EthSpec>(&self) -> Result<BlindedBeaconBlock<E>, DecodeError> {
         let fork = ForkName::from(self.version);
         BlindedBeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
@@ -381,14 +379,14 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         &self,
         value: &ProposerConsensusData,
     ) -> Result<(), DataValidationError> {
-        let fork = ForkName::from(value.version);
-
         // Always do this check, even if we're not validating slashing. This is to ensure that we
         // have a decodable value.
-        let header = BlindedBeaconBlock::<E>::from_ssz_bytes_for_fork(&value.data_ssz, fork)
+        let header = value
+            .get_blinded_block_data::<E>()
             .map(|block| block.block_header())
             .or_else(|_| {
-                FullBlockContents::<E>::from_ssz_bytes_for_fork(&value.data_ssz, fork)
+                value
+                    .get_block_data::<E>()
                     .map(|block| block.block().block_header())
             })
             .map_err(DataValidationError::DecodeError)?;

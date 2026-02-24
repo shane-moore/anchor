@@ -5,26 +5,11 @@ use ssv_types::consensus::{BEACON_ROLE_PROPOSER, BeaconRole};
 use ssz::{Decode, Encode};
 use types::{BlindedBeaconBlock, ForkName, MainnetEthSpec};
 
-use crate::{SpecTest, utils::is_bls_validation_error};
+use crate::{
+    SpecTest,
+    utils::{deserializers::deserialize_base64_or_empty, error_codes, is_bls_validation_error},
+};
 
-/// Go error codes from ssv-spec `types/error.go` (iota + 1) relevant to
-/// `ProposerConsensusData.Validate()`.
-mod error_codes {
-    pub const NO_ERROR: i64 = 0;
-    /// `UnmarshalSSZErrorCode` — SSZ decode failure for both blinded and regular block.
-    pub const UNMARSHAL_SSZ: i64 = 1;
-    /// `UnknownDutyRoleDataErrorCode` — duty type is not `BNRoleProposer`.
-    pub const UNKNOWN_DUTY_ROLE_DATA: i64 = 10;
-    /// `UnknownBlockVersionErrorCode` — unrecognized fork version.
-    pub const UNKNOWN_BLOCK_VERSION: i64 = 11;
-}
-
-// ==================== Deserialization structs ====================
-
-/// Intermediate struct for deserializing `ValidatorDuty` from JSON.
-///
-/// Needed because Go serializes `Slot` and `ValidatorIndex` as strings and
-/// `Type` as a raw integer, while `ValidatorSyncCommitteeIndices` can be null.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct TestDuty {
@@ -32,9 +17,6 @@ struct TestDuty {
     duty_type: u64,
 }
 
-/// Intermediate struct for deserializing `ProposerConsensusData` from JSON.
-///
-/// `Version` is a string like "capella", and `DataSSZ` is base64-encoded.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct TestConsensusData {
@@ -48,16 +30,10 @@ struct TestConsensusData {
     data_ssz: Vec<u8>,
 }
 
-/// Top-level test fixture for `ProposerConsensusDataTest`.
+/// Mirrors Go's `ProposerConsensusDataTest.Run()` → `ConsensusData.Validate()`.
 ///
-/// Mirrors Go's `ProposerConsensusDataTest.Run()` which calls
-/// `ConsensusData.Validate()` and asserts the resulting error code.
-///
-/// Validation is implemented locally because Anchor's `ProposerConsensusDataValidator`
-/// requires a `SlashingDatabase`, `ChainSpec`, and other production dependencies.
-/// The local validation mirrors Go's `Validate()` logic:
-/// 1. Check duty type == BEACON_ROLE_PROPOSER
-/// 2. Try SSZ decode of data_ssz as blinded block, then regular block
+/// Validated locally because Anchor's production validator requires `SlashingDatabase`,
+/// `ChainSpec`, etc. Checks: duty type == proposer, then tries blinded/regular block decode.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ProposerConsensusDataTest {
@@ -84,16 +60,11 @@ impl SpecTest for ProposerConsensusDataTest {
 }
 
 impl ProposerConsensusDataTest {
-    /// Local validation mirroring Go's `ProposerConsensusData.Validate()`.
-    ///
-    /// Go's validation order:
-    /// 1. Check `Duty.Type == BNRoleProposer` -> `UnknownDutyRoleDataErrorCode` (10)
-    /// 2. Call `GetBlockData()` which: a. For known versions: try blinded then regular block ->
-    ///    `UnmarshalSSZErrorCode` (1) b. For unknown versions: -> `UnknownBlockVersionErrorCode`
-    ///    (11)
+    /// Mirrors Go's validation order:
+    /// 1. `Duty.Type == BNRoleProposer` → error code 10
+    /// 2. `GetBlockData()` → blinded then regular → error code 1 or 11
     fn validate(&self) -> Result<(), i64> {
-        // Step 1: Check duty type.
-        // `BeaconRole` has a private inner field, so we construct it via SSZ roundtrip.
+        // BeaconRole has a private inner field, so we construct via SSZ roundtrip.
         let duty_role =
             BeaconRole::from_ssz_bytes(&self.consensus_data.duty.duty_type.as_ssz_bytes())
                 .map_err(|_| error_codes::UNKNOWN_DUTY_ROLE_DATA)?;
@@ -101,18 +72,12 @@ impl ProposerConsensusDataTest {
             return Err(error_codes::UNKNOWN_DUTY_ROLE_DATA);
         }
 
-        // Step 2: Parse the fork version and try decoding the block data.
-        // This exercises the same Lighthouse code paths as Anchor's production
-        // `validate_block_proposal()` in `consensus.rs`.
         let fork_name = ForkName::from_str(&self.consensus_data.version)
             .map_err(|_| error_codes::UNKNOWN_BLOCK_VERSION)?;
 
         let data_ssz = &self.consensus_data.data_ssz;
 
-        // Try blinded block first (same order as Go and Anchor production code).
-        // This exercises the same `BlindedBeaconBlock::from_ssz_bytes_for_fork` and
-        // `FullBlockContents::from_ssz_bytes_for_fork` used by Anchor's production
-        // `validate_block_proposal()` in consensus.rs:372-377.
+        // Try blinded then regular block (same order as Go).
         let blinded_result =
             BlindedBeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(data_ssz, fork_name);
 
@@ -120,7 +85,6 @@ impl ProposerConsensusDataTest {
             return Ok(());
         }
 
-        // Then try regular block contents
         let regular_result =
             eth2::types::FullBlockContents::<MainnetEthSpec>::from_ssz_bytes_for_fork(
                 data_ssz, fork_name,
@@ -130,13 +94,9 @@ impl ProposerConsensusDataTest {
             return Ok(());
         }
 
-        // Both failed. Distinguish between structural SSZ errors and BLS validation errors.
-        //
-        // Go's SSZ library (fastssz) does not validate BLS points during deserialization,
-        // while Lighthouse does. The Go spec fixtures contain synthetic BLS signatures
-        // (e.g., 0x010203...) that are structurally valid SSZ but fail BLS point-on-curve
-        // checks. When both decoders fail solely due to BLS validation, the underlying
-        // SSZ structure is valid -- treat this as success to match Go's behavior.
+        // Both failed. BLS validation errors mean the SSZ is structurally valid but
+        // contains synthetic BLS points that Anchor rejects (Go's fastssz doesn't
+        // validate BLS during decode). Either format matching is enough.
         let blinded_err = blinded_result.unwrap_err();
         let regular_err = regular_result.unwrap_err();
 
@@ -146,19 +106,4 @@ impl ProposerConsensusDataTest {
 
         Err(error_codes::UNMARSHAL_SSZ)
     }
-}
-
-/// Deserializes a base64-encoded string, treating empty strings as empty `Vec<u8>`.
-///
-/// Some error fixtures have `"DataSSZ": ""` which is valid — it represents empty data
-/// that should fail SSZ decoding.
-fn deserialize_base64_or_empty<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<u8>, D::Error> {
-    let s = String::deserialize(deserializer)?;
-    if s.is_empty() {
-        return Ok(Vec::new());
-    }
-    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
-        .map_err(|e| serde::de::Error::custom(format!("Failed to decode base64: {e}")))
 }

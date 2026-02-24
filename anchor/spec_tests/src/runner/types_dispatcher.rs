@@ -57,17 +57,17 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
 
         // Proposer consensus data validation tests
         "proposerconsensusdata.ProposerConsensusDataTest" => {
-            Some(run_test::<types::ProposerConsensusDataTest>(path, contents))
+            DispatchOutcome::Executed(run_test::<types::ProposerConsensusDataTest>(path, contents))
         }
 
         // Proposer block data extraction tests
         "consensusdataproposer.ProposerSpecTest" => {
-            Some(run_test::<types::ConsensusDataProposerTest>(path, contents))
+            DispatchOutcome::Executed(run_test::<types::ConsensusDataProposerTest>(path, contents))
         }
 
         // Encryption tests
         "encryption.EncryptionSpecTest" => {
-            Some(run_test::<types::EncryptionSpecTest>(path, contents))
+            DispatchOutcome::Executed(run_test::<types::EncryptionSpecTest>(path, contents))
         }
 
         // TODO(spec-tests): Add more test types here as they are implemented.

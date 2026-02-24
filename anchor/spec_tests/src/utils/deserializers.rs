@@ -141,6 +141,22 @@ pub fn deserialize_hex_hash256<'de, D: serde::Deserializer<'de>>(
     Ok(Hash256::from_slice(&bytes))
 }
 
+/// Deserializes a base64-encoded string, treating empty strings as empty `Vec<u8>`.
+///
+/// Some error fixtures have `"DataSSZ": ""` which is valid since it represents empty data
+/// that should fail SSZ decoding.
+pub fn deserialize_base64_or_empty<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u8>, D::Error> {
+    let s = String::deserialize(deserializer)?;
+    if s.is_empty() {
+        return Ok(Vec::new());
+    }
+    STANDARD
+        .decode(s)
+        .map_err(|e| serde::de::Error::custom(format!("Failed to decode base64: {e}")))
+}
+
 /// Deserializes a vector of hex strings into `Vec<MessageId>`.
 ///
 /// Each hex string is decoded to 56 bytes and converted to a `MessageId`.
