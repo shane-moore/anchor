@@ -9,7 +9,6 @@ use crate::{run_test, types};
 enum DispatchOutcome {
     Executed(Result<(), String>),
     SkippedKnown,
-    SkippedUnknown,
 }
 
 /// Dispatch a single fixture file to its test type based on the exact prefix before the first `_`.
@@ -102,12 +101,7 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::StructureSizeTest>(path, contents))
         }
 
-        // TODO(spec-tests): Add more test types here as they are implemented.
-        // This arm will be replaced with panic!() once all test types are added.
-        _ => {
-            eprintln!("SKIP (not yet implemented): {prefix}");
-            DispatchOutcome::SkippedUnknown
-        }
+        _ => panic!("Unknown types test prefix: {prefix}"),
     }
 }
 
@@ -127,7 +121,6 @@ pub fn run_all_type_fixtures() {
     let mut failures = Vec::new();
     let mut executed_count = 0;
     let mut skipped_known_count = 0;
-    let mut skipped_unknown_count = 0;
 
     for entry in fs::read_dir(&dir).expect("Failed to read fixture directory") {
         let entry = entry.expect("Failed to read directory entry");
@@ -152,7 +145,6 @@ pub fn run_all_type_fixtures() {
                 }
             }
             DispatchOutcome::SkippedKnown => skipped_known_count += 1,
-            DispatchOutcome::SkippedUnknown => skipped_unknown_count += 1,
         }
     }
 
@@ -162,9 +154,7 @@ pub fn run_all_type_fixtures() {
         dir.display()
     );
 
-    eprintln!(
-        "{executed_count} executed, {skipped_known_count} skipped (known-inapplicable), {skipped_unknown_count} skipped (not yet implemented)"
-    );
+    eprintln!("{executed_count} executed, {skipped_known_count} skipped (known-inapplicable)");
 
     if !failures.is_empty() {
         panic!(
