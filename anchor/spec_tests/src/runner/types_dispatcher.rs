@@ -71,15 +71,19 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
         }
 
         // Duty role mapping tests
-        "duty.DutySpecTest" => Some(run_test::<types::DutySpecTest>(path, contents)),
+        "duty.DutySpecTest" => {
+            DispatchOutcome::Executed(run_test::<types::DutySpecTest>(path, contents))
+        }
 
         // Deposit data signing root tests
         "beacon.DepositDataSpecTest" => {
-            Some(run_test::<types::BeaconDepositDataSpecTest>(path, contents))
+            DispatchOutcome::Executed(run_test::<types::BeaconDepositDataSpecTest>(path, contents))
         }
 
         // SSZ merkleization tests
-        "ssz.SSZSpecTest" => Some(run_test::<types::SSZSpecTest>(path, contents)),
+        "ssz.SSZSpecTest" => {
+            DispatchOutcome::Executed(run_test::<types::SSZSpecTest>(path, contents))
+        }
 
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.

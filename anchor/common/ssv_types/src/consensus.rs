@@ -460,12 +460,6 @@ pub struct ValidatorDuty {
 #[ssz(struct_behaviour = "transparent")]
 pub struct BeaconRole(u64);
 
-impl From<u64> for BeaconRole {
-    fn from(value: u64) -> Self {
-        BeaconRole(value)
-    }
-}
-
 pub const BEACON_ROLE_ATTESTER: BeaconRole = BeaconRole(0);
 pub const BEACON_ROLE_AGGREGATOR: BeaconRole = BeaconRole(1);
 pub const BEACON_ROLE_PROPOSER: BeaconRole = BeaconRole(2);

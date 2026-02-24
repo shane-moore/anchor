@@ -11,8 +11,7 @@ use crate::{
     },
 };
 
-/// Mirrors Go's `ProposerSpecTest.Run()`: SSZ-decode `ProposerConsensusData`,
-/// extract block data, then verify blinded state, roots, and SSZ roundtrips.
+/// Mirrors Go's `ProposerSpecTest.Run()`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ConsensusDataProposerTest {
@@ -39,8 +38,7 @@ pub struct ConsensusDataProposerTest {
 
 enum BlockExtractionResult {
     Decoded(BlockData),
-    /// Structurally valid SSZ but Lighthouse rejects synthetic BLS points.
-    /// Can only determine blinded state, not roots.
+    /// BLS rejected synthetic points; can only determine blinded state.
     BlsValidationOnly {
         is_blinded: bool,
     },
@@ -54,7 +52,7 @@ struct BlockData {
 
 impl SpecTest for ConsensusDataProposerTest {
     fn run(&self) -> Result<(), String> {
-        // Go treats DataVersion as raw uint64; Rust rejects unknown values.
+        // Rust rejects unknown `DataVersion` variants; Go treats as raw `uint64`.
         let cd = match ssv_types::consensus::ProposerConsensusData::from_ssz_bytes(&self.data_cd) {
             Ok(cd) => cd,
             Err(DecodeError::NoMatchingVariant) => {
@@ -82,7 +80,6 @@ impl SpecTest for ConsensusDataProposerTest {
                 self.verify_block_data(&block_data)?;
             }
             BlockExtractionResult::BlsValidationOnly { is_blinded } => {
-                // Can only verify blinded state; roots/SSZ unavailable.
                 if is_blinded != self.blinded {
                     return Err(format!(
                         "Block blinded state mismatch (BLS path): got {is_blinded}, expected {}",
@@ -144,7 +141,7 @@ impl ConsensusDataProposerTest {
         Ok(())
     }
 
-    /// Tries blinded then regular block decode (same order as Go).
+    /// Tries blinded then full decode (same order as Go).
     fn get_block_data(
         &self,
         cd: &ssv_types::consensus::ProposerConsensusData,
@@ -157,7 +154,7 @@ impl ConsensusDataProposerTest {
             })),
             Err(blinded_err) => match cd.get_block_data::<MainnetEthSpec>() {
                 Ok(full) => {
-                    // Go returns the inner BeaconBlock, not full contents with blobs.
+                    // Go returns `BeaconBlock`, not `FullBlockContents`.
                     let block = full.block();
                     Ok(BlockExtractionResult::Decoded(BlockData {
                         is_blinded: false,
@@ -166,8 +163,6 @@ impl ConsensusDataProposerTest {
                     }))
                 }
                 Err(full_err) => {
-                    // BLS validation errors mean structurally valid SSZ with synthetic
-                    // BLS points (Go's fastssz doesn't validate BLS during decode).
                     let blinded_is_bls = is_bls_validation_error(&blinded_err);
                     let regular_is_bls = is_bls_validation_error(&full_err);
 

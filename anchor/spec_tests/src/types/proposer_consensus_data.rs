@@ -32,8 +32,7 @@ struct TestConsensusData {
 
 /// Mirrors Go's `ProposerConsensusDataTest.Run()` → `ConsensusData.Validate()`.
 ///
-/// Validated locally because Anchor's production validator requires `SlashingDatabase`,
-/// `ChainSpec`, etc. Checks: duty type == proposer, then tries blinded/regular block decode.
+/// Validated locally because Anchor's production validator needs `SlashingDatabase`, etc.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ProposerConsensusDataTest {
@@ -60,11 +59,9 @@ impl SpecTest for ProposerConsensusDataTest {
 }
 
 impl ProposerConsensusDataTest {
-    /// Mirrors Go's validation order:
-    /// 1. `Duty.Type == BNRoleProposer` → error code 10
-    /// 2. `GetBlockData()` → blinded then regular → error code 1 or 11
+    /// Follows Go's validation order: duty type check, then block decode.
     fn validate(&self) -> Result<(), i64> {
-        // BeaconRole has a private inner field, so we construct via SSZ roundtrip.
+        // BeaconRole has a private inner field; construct via SSZ roundtrip.
         let duty_role =
             BeaconRole::from_ssz_bytes(&self.consensus_data.duty.duty_type.as_ssz_bytes())
                 .map_err(|_| error_codes::UNKNOWN_DUTY_ROLE_DATA)?;
@@ -77,7 +74,7 @@ impl ProposerConsensusDataTest {
 
         let data_ssz = &self.consensus_data.data_ssz;
 
-        // Try blinded then regular block (same order as Go).
+        // Blinded then regular (same order as Go).
         let blinded_result =
             BlindedBeaconBlock::<MainnetEthSpec>::from_ssz_bytes_for_fork(data_ssz, fork_name);
 
@@ -94,9 +91,7 @@ impl ProposerConsensusDataTest {
             return Ok(());
         }
 
-        // Both failed. BLS validation errors mean the SSZ is structurally valid but
-        // contains synthetic BLS points that Anchor rejects (Go's fastssz doesn't
-        // validate BLS during decode). Either format matching is enough.
+        // Synthetic BLS in fixtures: Anchor validates, Go doesn't.
         let blinded_err = blinded_result.unwrap_err();
         let regular_err = regular_result.unwrap_err();
 

@@ -10,16 +10,10 @@ use crate::{
     },
 };
 
-/// Tests SSZ merkleization of Capella withdrawals.
+/// Mirrors Go's `SSZSpecTest.Run()`. Verifies withdrawals `HashTreeRoot`.
 ///
-/// Mirrors Go's `SSZSpecTest.Run()`: decodes `ProposerConsensusData`, extracts
-/// the beacon block via `GetBlockData()`, accesses the Capella execution payload
-/// withdrawals, and verifies their `HashTreeRoot`.
-///
-/// Note: The fixture uses synthetic BLS signatures that Lighthouse validates
-/// during SSZ decode (Go's fastssz does not). If BLS validation prevents block
-/// decode, the test passes silently — see `ConsensusDataProposerTest` for the
-/// same divergence pattern.
+/// Fixtures contain synthetic BLS; Anchor rejects these during SSZ decode
+/// (Go's fastssz doesn't validate BLS), so BLS failures pass silently.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SSZSpecTest {
@@ -31,11 +25,10 @@ pub struct SSZSpecTest {
 
 impl SpecTest for SSZSpecTest {
     fn run(&self) -> Result<(), String> {
-        // Step 1: SSZ-decode ProposerConsensusData from fixture Data.
         let cd = ssv_types::consensus::ProposerConsensusData::from_ssz_bytes(&self.data)
             .map_err(|e| format!("Failed to decode ProposerConsensusData: {e:?}"))?;
 
-        // Step 2: Extract block data. Try blinded first, then full (same order as Go).
+        // Try blinded then full (same order as Go).
         let withdrawals_root = match cd.get_blinded_block_data::<MainnetEthSpec>() {
             Ok(blinded) => blinded
                 .body()
@@ -52,12 +45,7 @@ impl SpecTest for SSZSpecTest {
                         format!("Failed to get withdrawals root from full block: {e:?}")
                     })?,
                 Err(full_err) => {
-                    // Both decoders failed. Check for BLS validation errors.
-                    // Lighthouse validates BLS points during SSZ decode; Go does not.
-                    // Synthetic BLS in fixtures causes this divergence.
-                    if is_bls_validation_error(&blinded_err)
-                        || is_bls_validation_error(&full_err)
-                    {
+                    if is_bls_validation_error(&blinded_err) || is_bls_validation_error(&full_err) {
                         return Ok(());
                     }
                     return Err(format!(
@@ -67,7 +55,6 @@ impl SpecTest for SSZSpecTest {
             },
         };
 
-        // Step 3: Assert withdrawals root matches expected.
         if withdrawals_root != self.expected_root {
             return Err(format!(
                 "Withdrawals root mismatch: got {withdrawals_root}, expected {}",
