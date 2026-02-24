@@ -588,20 +588,50 @@ pub struct AssignedAggregator {
 /// on aggregation duties. It supports both attestation aggregation and sync committee
 /// contribution aggregation.
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "PascalCase"))]
+#[cfg_attr(feature = "serde", serde(bound(deserialize = "E: EthSpec")))]
 pub struct AggregatorCommitteeConsensusData<E: EthSpec> {
     /// Data version (fork) for deserialization of attestations/contributions
     pub version: DataVersion,
     /// Validators selected as attestation aggregators with their selection proofs
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, deserialize_with = "deserialize_optional_variable_list")
+    )]
     pub aggregators: VariableList<AssignedAggregator, MaxAggregators>,
     /// Committee indexes that have aggregated attestations
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default,
+            rename = "AggregatorsCommitteeIndexes",
+            deserialize_with = "deserialize_optional_variable_list"
+        )
+    )]
     pub aggregator_committee_indexes: VariableList<u64, MaxCommitteeIndexes>,
     /// Aggregated attestations as SSZ bytes, one per committee index
     /// Using bytes because attestation type varies by fork (Base vs Electra)
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default,
+            deserialize_with = "deserialize_optional_base64_nested_variable_list"
+        )
+    )]
     pub aggregated_attestations:
         VariableList<VariableList<u8, MaxAggregatedAttestationBytes>, MaxCommitteeIndexes>,
     /// Validators selected as sync committee contributors with their selection proofs
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, deserialize_with = "deserialize_optional_variable_list")
+    )]
     pub contributors: VariableList<AssignedAggregator, MaxContributors>,
     /// Sync committee contributions, one per subcommittee (4 total)
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, deserialize_with = "deserialize_optional_variable_list")
+    )]
     pub sync_committee_contributions:
         VariableList<SyncCommitteeContribution<E>, MaxSyncContributions>,
 }

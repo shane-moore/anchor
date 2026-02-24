@@ -46,6 +46,33 @@ pub const NO_PARTIAL_SIG_MESSAGES: i64 = 19;
 /// `SSVMessageHasInvalidSignatureErrorCode` — RSA signature verification failed.
 pub const SSV_MESSAGE_HAS_INVALID_SIGNATURE: i64 = 46;
 
+/// `AggCommAggCommIdxCntMismatchErrorCode` — committee indexes count != attestations count.
+pub const AGG_COMM_IDX_CNT_MISMATCH: i64 = 71;
+
+/// `AggCommCommIdxMismatchErrorCode` — aggregator's committee index not in allowed list.
+pub const AGG_COMM_IDX_MISMATCH: i64 = 72;
+
+/// `AggCommUnusedCommIdxErrorCode` — committee index not used by any aggregator.
+pub const AGG_COMM_UNUSED_IDX: i64 = 73;
+
+/// `AggCommDuplicatedCommIdxErrorCode` — duplicate committee index in list.
+pub const AGG_COMM_DUPLICATED_IDX: i64 = 74;
+
+/// `AggCommSubnetNotInSCSubnetsErrorCode` — contributor subnet not in contributions list.
+pub const AGG_COMM_SUBNET_MISSING: i64 = 75;
+
+/// `AggCommSCCSubnetDuplicateErrorCode` — duplicate sync committee subnet index.
+pub const AGG_COMM_SUBNET_DUPLICATE: i64 = 76;
+
+/// `AggCommUnusedSubnetErrorCode` — sync subnet not used by any contributor.
+pub const AGG_COMM_UNUSED_SUBNET: i64 = 77;
+
+/// `AggCommConsensusDataNoValidatorErrorCode` — no aggregators or contributors assigned.
+pub const AGG_COMM_NO_VALIDATOR: i64 = 78;
+
+/// `AggCommAttestationDecodingErrorCode` — attestation SSZ decode failure.
+pub const AGG_COMM_ATTESTATION_DECODE: i64 = 84;
+
 /// Sentinel for Anchor-specific errors without Go equivalents.
 /// If a fixture hits this, the test will fail with a clear mismatch.
 pub const UNMAPPED_ERROR_CODE: i64 = -1;

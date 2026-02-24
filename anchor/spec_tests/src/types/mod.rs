@@ -1,3 +1,4 @@
+mod aggregator_committee_consensus_data;
 mod aggregator_committee_consensus_data_encoding;
 mod beacon_deposit_data;
 mod beacon_vote_encoding;
@@ -16,6 +17,7 @@ mod ssv_msg;
 mod ssz_spec_test;
 mod structure_size;
 
+pub use aggregator_committee_consensus_data::*;
 pub use aggregator_committee_consensus_data_encoding::*;
 pub use beacon_deposit_data::*;
 pub use beacon_vote_encoding::*;

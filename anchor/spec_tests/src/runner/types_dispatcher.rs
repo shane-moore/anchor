@@ -55,6 +55,13 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::PartialSigMsgSpecTest>(path, contents))
         }
 
+        // Aggregator committee consensus data validation tests
+        "aggregatorcommitteeconsensusdata.AggregatorCommitteeConsensusDataTest" => {
+            DispatchOutcome::Executed(run_test::<types::AggregatorCommitteeConsensusDataTest>(
+                path, contents,
+            ))
+        }
+
         // Proposer consensus data validation tests
         "proposerconsensusdata.ProposerConsensusDataTest" => {
             DispatchOutcome::Executed(run_test::<types::ProposerConsensusDataTest>(path, contents))
