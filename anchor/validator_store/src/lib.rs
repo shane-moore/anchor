@@ -505,6 +505,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             root: signing_root,
             index: validator.index.ok_or(SpecificError::MissingIndex)?,
             share: decrypted_key_share,
+            validator_pubkey: validator.public_key,
         };
 
         let _timer =

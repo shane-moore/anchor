@@ -1,8 +1,7 @@
 use std::{
-    collections::{HashMap, hash_map},
+    collections::{HashMap, HashSet, hash_map},
     future::Future,
     mem,
-    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
 };
@@ -10,7 +9,7 @@ use std::{
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
-use database::OwnOperatorId;
+use database::{DatabaseError, NetworkDatabase, OwnOperatorId};
 use fork::ForkSchedule;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
@@ -40,6 +39,8 @@ use tokio::{
 };
 use tracing::{Instrument, debug_span, error, trace, warn};
 use types::{Hash256, Slot};
+
+mod metrics;
 
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
@@ -85,6 +86,10 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     slots_per_epoch: u64,
     /// A message sender used for outgoing messages.
     message_sender: Arc<dyn MessageSender>,
+    /// Database handle, shared with each spawned `signature_collector` task so
+    /// it can look up per-operator share pubkeys for the per-share fallback
+    /// verification path.
+    database: Arc<NetworkDatabase>,
     /// A map from the signing root and signing validator to the corresponding signature collector.
     signature_collectors: DashMap<(Hash256, ValidatorIndex), SignatureCollector>,
     /// A map from the hash of a decided committee value and committee ID to the local batch of
@@ -102,6 +107,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         slots_per_epoch: u64,
         message_sender: Arc<dyn MessageSender>,
         slot_clock: S,
+        database: Arc<NetworkDatabase>,
     ) -> Result<Arc<Self>, CollectionError> {
         let manager = Arc::new(Self {
             processor,
@@ -110,6 +116,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             slot_clock: slot_clock.clone(),
             slots_per_epoch,
             message_sender,
+            database,
             signature_collectors: DashMap::new(),
             committee_partial_signature_batches: DashMap::new(),
         });
@@ -167,6 +174,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     kind: CollectorMessageKind::RegisterNotifier {
                         notify: result_tx,
                         threshold: cloned_metadata.threshold,
+                        validator_pubkey: validator_signing_data.validator_pubkey,
                     },
                     _drop_on_finish: drop_on_finish,
                 });
@@ -394,8 +402,9 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     sender: tx.clone(),
                     for_slot: slot,
                 });
+                let database = Arc::clone(&self.database);
                 let _ = self.processor.permitless.send_async(
-                    Box::pin(signature_collector(rx).instrument(span)),
+                    Box::pin(signature_collector(rx, signing_root, database).instrument(span)),
                     COLLECTOR_NAME,
                 );
                 trace!(
@@ -483,6 +492,7 @@ pub struct ValidatorSigningData {
     pub root: Hash256,
     pub index: ValidatorIndex,
     pub share: Option<SecretKey>,
+    pub validator_pubkey: PublicKeyBytes,
 }
 
 struct CollectorMessage {
@@ -496,6 +506,7 @@ enum CollectorMessageKind {
     RegisterNotifier {
         notify: oneshot::Sender<Arc<Signature>>,
         threshold: u64,
+        validator_pubkey: PublicKeyBytes,
     },
     /// A new partial signature is available - either because it arrived from the network, or
     /// because we created it
@@ -569,74 +580,131 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
 
 /// The actual signature collector task, waiting for messages.
 ///
-/// The recv loop is the only place that matches on [`CollectorMessageKind`];
-/// it dispatches each transport message to a typed method on
-/// [`SignatureCollectorState`] so the state machine never sees the channel
-/// shape (or the size-balancing `Box<Signature>` it carries).
-async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
-    let mut state = SignatureCollectorState::default();
+/// The recv loop is the only place that matches on [`CollectorMessageKind`]
+/// and the only place that performs async I/O (DB lookups). [`SignatureCollectorState`]
+/// is a pure synchronous state machine that signals I/O needs via [`CollectorAction`].
+async fn signature_collector(
+    mut rx: mpsc::UnboundedReceiver<CollectorMessage>,
+    signing_root: Hash256,
+    database: Arc<NetworkDatabase>,
+) {
+    let mut state = SignatureCollectorState::new(signing_root);
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
-        let outcome = match message.kind {
-            CollectorMessageKind::RegisterNotifier { notify, threshold } => {
-                state.register_request(notify, threshold)
-            }
+        let mut outcome = match message.kind {
+            CollectorMessageKind::RegisterNotifier {
+                notify,
+                threshold,
+                validator_pubkey,
+            } => state.register_request(notify, threshold, validator_pubkey),
             CollectorMessageKind::PartialSignature {
                 operator_id,
                 signature,
             } => state.add_partial_signature(operator_id, *signature),
         };
-        if outcome.is_break() {
-            return;
+        loop {
+            match outcome {
+                CollectorAction::Recv => break,
+                CollectorAction::Exit => return,
+                CollectorAction::FetchSharePubkeys(validator_pubkey) => {
+                    metrics::inc_counter(&metrics::SIGNATURE_VERIFICATION_FAILURES_TOTAL);
+                    warn!(
+                        ?signing_root,
+                        "Reconstructed signature failed master-key verification; running fallback"
+                    );
+                    match fetch_share_pubkeys(&database, &validator_pubkey).await {
+                        Ok(share_pubkeys) => outcome = state.apply_fallback(share_pubkeys),
+                        Err(err) => {
+                            error!(?err, "Failed to look up share pubkeys for fallback");
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
+/// Outcome of a single synchronous step against [`SignatureCollectorState`].
+/// `FetchSharePubkeys` is an effect request: the recv loop must perform the
+/// DB lookup and feed the result back via [`SignatureCollectorState::apply_fallback`].
+enum CollectorAction {
+    Recv,
+    Exit,
+    FetchSharePubkeys(PublicKeyBytes),
+}
+
+/// Threshold + validator pubkey are recorded together on first `RegisterNotifier`
+/// and stay coupled thereafter. A single `Option<Registration>` makes the
+/// "registered yet?" check one decision instead of two.
+struct Registration {
+    threshold: u64,
+    validator_pubkey: PublicKeyBytes,
+}
+
 /// Invariant: once `full_signature` is `Some`, both `signature_share` and
 /// `notifiers` are empty (drained by `try_reconstruct`).
-#[derive(Default)]
 struct SignatureCollectorState {
     notifiers: Vec<oneshot::Sender<Arc<Signature>>>,
     signature_share: HashMap<OperatorId, Signature>,
     full_signature: Option<Arc<Signature>>,
-    threshold: Option<u64>,
+    registration: Option<Registration>,
+    signing_root: Hash256,
 }
 
 impl SignatureCollectorState {
+    fn new(signing_root: Hash256) -> Self {
+        Self {
+            notifiers: Vec::new(),
+            signature_share: HashMap::new(),
+            full_signature: None,
+            registration: None,
+            signing_root,
+        }
+    }
+
     /// Register a task waiting for the reconstructed signature.
     ///
     /// If reconstruction has already completed, the cached signature is
     /// delivered immediately. Otherwise the notifier is queued and the
-    /// threshold is recorded; conflicting thresholds from concurrent
-    /// requests cause the collector to `Break` (the recv loop drops the
-    /// state, surfacing `RecvError` to every waiter).
-    ///
-    /// Returns `Break` when the collector should exit (conflicting
-    /// thresholds, unrecoverable reconstruction failure).
+    /// registration recorded. Conflicting thresholds or validator pubkeys
+    /// from concurrent registrations return `Exit`.
     fn register_request(
         &mut self,
         notify: oneshot::Sender<Arc<Signature>>,
-        new_threshold: u64,
-    ) -> ControlFlow<()> {
+        threshold: u64,
+        validator_pubkey: PublicKeyBytes,
+    ) -> CollectorAction {
         if let Some(full_signature) = &self.full_signature {
             if let Err(err) = notify.send(Arc::clone(full_signature)) {
                 warn!(?err, "Failed to send recovered signature");
             }
-            return ControlFlow::Continue(());
+            return CollectorAction::Recv;
         }
         self.notifiers.push(notify);
-        if let Some(old_threshold) = self.threshold
-            && new_threshold != old_threshold
-        {
-            // Different tasks expect different thresholds. We can not know which is
-            // correct, so we exit this instance.
-            error!(
-                new_threshold,
-                old_threshold, "Conflicting thresholds passed!"
-            );
-            return ControlFlow::Break(());
+        if let Some(existing) = &self.registration {
+            if existing.threshold != threshold {
+                error!(
+                    new_threshold = threshold,
+                    old_threshold = existing.threshold,
+                    "Conflicting thresholds passed!"
+                );
+                return CollectorAction::Exit;
+            }
+            if existing.validator_pubkey != validator_pubkey {
+                error!(
+                    new = ?validator_pubkey,
+                    old = ?existing.validator_pubkey,
+                    "Conflicting validator pubkeys passed!"
+                );
+                return CollectorAction::Exit;
+            }
+        } else {
+            self.registration = Some(Registration {
+                threshold,
+                validator_pubkey,
+            });
         }
-        self.threshold = Some(new_threshold);
         self.try_reconstruct()
     }
 
@@ -645,16 +713,13 @@ impl SignatureCollectorState {
     /// Late shares arriving after reconstruction are silently dropped.
     /// Conflicting shares from the same operator are logged but not fatal,
     /// since the source of the discrepancy is not knowable here.
-    ///
-    /// Returns `Break` when the collector should exit (unrecoverable
-    /// reconstruction failure).
     fn add_partial_signature(
         &mut self,
         operator_id: OperatorId,
         signature: Signature,
-    ) -> ControlFlow<()> {
+    ) -> CollectorAction {
         if self.full_signature.is_some() {
-            return ControlFlow::Continue(());
+            return CollectorAction::Recv;
         }
 
         match self.signature_share.entry(operator_id) {
@@ -676,40 +741,170 @@ impl SignatureCollectorState {
         self.try_reconstruct()
     }
 
-    fn try_reconstruct(&mut self) -> ControlFlow<()> {
-        let Some(threshold) = self.threshold else {
-            return ControlFlow::Continue(());
+    /// Drive reconstruction: combine if quorum is met, verify against the
+    /// validator master pubkey, and surface `FetchSharePubkeys` on verification
+    /// failure so the recv loop can drive the fallback.
+    fn try_reconstruct(&mut self) -> CollectorAction {
+        let Some(registration) = &self.registration else {
+            return CollectorAction::Recv;
         };
-        if (self.signature_share.len() as u64) < threshold {
-            return ControlFlow::Continue(());
+        if (self.signature_share.len() as u64) < registration.threshold {
+            return CollectorAction::Recv;
         }
+        let validator_pubkey = registration.validator_pubkey;
 
-        let signature = match combine_signatures(mem::take(&mut self.signature_share)) {
-            Ok(signature) => Arc::new(signature),
-            Err(err) => {
+        match try_combine_and_verify(&self.signature_share, &validator_pubkey, self.signing_root) {
+            CombineOutcome::Success(signature) => {
+                trace!(?signature, "Successfully recovered signature");
+                self.signature_share.clear();
+                for notifier in mem::take(&mut self.notifiers) {
+                    if notifier.send(Arc::clone(&signature)).is_err() {
+                        warn!("Callback dropped - signature is no longer relevant");
+                    }
+                }
+                self.full_signature = Some(signature);
+                CollectorAction::Recv
+            }
+            CombineOutcome::CombineFailed(err) => {
                 error!(?err, "Failed to recover signature");
-                return ControlFlow::Break(());
+                CollectorAction::Exit
             }
-        };
-
-        trace!(?signature, "Successfully recovered signature");
-
-        for notifier in mem::take(&mut self.notifiers) {
-            if notifier.send(Arc::clone(&signature)).is_err() {
-                warn!("Callback dropped - signature is no longer relevant");
+            CombineOutcome::VerificationFailed => {
+                CollectorAction::FetchSharePubkeys(validator_pubkey)
             }
         }
-        self.full_signature = Some(signature);
-        ControlFlow::Continue(())
+    }
+
+    /// Per-share fallback: identify shares that fail individual verification
+    /// against `share_pubkeys`, evict them, and re-attempt reconstruction.
+    /// `Exit` when verification failed but every share is individually valid
+    /// (no operator to attribute the failure to: e.g. mismatched validator
+    /// pubkey, corrupted DB state).
+    fn apply_fallback(
+        &mut self,
+        share_pubkeys: HashMap<OperatorId, PublicKeyBytes>,
+    ) -> CollectorAction {
+        let invalid_operators =
+            find_invalid_shares(&self.signature_share, self.signing_root, &share_pubkeys);
+
+        if invalid_operators.is_empty() {
+            let operators: Vec<_> = self.signature_share.keys().copied().collect();
+            error!(
+                signing_root = ?self.signing_root,
+                ?operators,
+                "Verification failed but every individual share is valid; aborting"
+            );
+            return CollectorAction::Exit;
+        }
+
+        warn!(?invalid_operators, "Evicting invalid shares");
+        for op in &invalid_operators {
+            self.signature_share.remove(op);
+        }
+        self.try_reconstruct()
     }
 }
 
+/// Outcome of a single combine-and-verify attempt against the validator master pubkey.
+enum CombineOutcome {
+    Success(Arc<Signature>),
+    /// Lagrange interpolation failed. Unrecoverable for this collector instance.
+    CombineFailed(CollectionError),
+    /// Combined signature did not verify against the master pubkey; caller
+    /// should run the per-share fallback to evict bad operator shares.
+    VerificationFailed,
+}
+
+fn try_combine_and_verify(
+    shares: &HashMap<OperatorId, Signature>,
+    validator_pubkey: &PublicKeyBytes,
+    signing_root: Hash256,
+) -> CombineOutcome {
+    let combined = match combine_signatures(shares) {
+        Ok(sig) => sig,
+        Err(err) => return CombineOutcome::CombineFailed(err),
+    };
+
+    if verify_compressed(&combined, validator_pubkey, signing_root) {
+        CombineOutcome::Success(Arc::new(combined))
+    } else {
+        CombineOutcome::VerificationFailed
+    }
+}
+
+/// Verify a BLS signature against a compressed pubkey. Returns `false` on
+/// decompression failure (and logs).
+fn verify_compressed(
+    signature: &Signature,
+    pubkey: &PublicKeyBytes,
+    signing_root: Hash256,
+) -> bool {
+    match pubkey.decompress() {
+        Ok(pk) => signature.verify(&pk, signing_root),
+        Err(err) => {
+            error!(
+                ?pubkey,
+                ?err,
+                "Failed to decompress pubkey for verification"
+            );
+            false
+        }
+    }
+}
+
+fn find_invalid_shares(
+    shares: &HashMap<OperatorId, Signature>,
+    signing_root: Hash256,
+    share_pubkeys: &HashMap<OperatorId, PublicKeyBytes>,
+) -> HashSet<OperatorId> {
+    let mut invalid = HashSet::new();
+    for (operator_id, signature) in shares {
+        match share_pubkeys.get(operator_id) {
+            Some(pubkey) => {
+                if !verify_compressed(signature, pubkey, signing_root) {
+                    invalid.insert(*operator_id);
+                }
+            }
+            None => {
+                // Unverifiable share: evict so reconstruction can retry without it.
+                warn!(
+                    %operator_id,
+                    "No share pubkey found in database; marking share as invalid"
+                );
+                invalid.insert(*operator_id);
+            }
+        }
+    }
+    invalid
+}
+
+/// Look up the per-operator share pubkey map for a validator via the database.
+/// Wraps the blocking SQLite call in `spawn_blocking` so it doesn't stall the
+/// async runtime.
+async fn fetch_share_pubkeys(
+    database: &Arc<NetworkDatabase>,
+    validator_pubkey: &PublicKeyBytes,
+) -> Result<HashMap<OperatorId, PublicKeyBytes>, DatabaseError> {
+    let database = Arc::clone(database);
+    let validator_pubkey = *validator_pubkey;
+    tokio::task::spawn_blocking(move || database.get_share_pubkeys_for_validator(&validator_pubkey))
+        .await
+        .map_err(|err| {
+            // `JoinError` mislabeled as `SQLError` pending a richer variant.
+            error!(
+                ?err,
+                "spawn_blocking task panicked while fetching share pubkeys"
+            );
+            DatabaseError::SQLError(err.to_string())
+        })?
+}
+
 fn combine_signatures(
-    shares: HashMap<OperatorId, Signature>,
+    shares: &HashMap<OperatorId, Signature>,
 ) -> Result<Signature, CollectionError> {
     let (ids, signatures): (Vec<_>, Vec<_>) = shares
-        .into_iter()
-        .map(|(k, s)| KeyId::try_from(*k).map(|k| (k, s)))
+        .iter()
+        .map(|(k, s)| KeyId::try_from(**k).map(|k| (k, s.clone())))
         .collect::<Result<_, _>>()?;
 
     Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
