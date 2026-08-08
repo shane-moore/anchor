@@ -27,11 +27,12 @@ use ssv_types::{
     partial_sig::PartialSignatureKind,
 };
 use ssz::Encode;
-use ssz_types::VariableList;
+use ssz_types::{BitVector, VariableList};
 use types::{
-    AttestationBase, AttestationData, Checkpoint, Epoch, ForkName, Hash256, MainnetEthSpec,
-    SignedAggregateAndProof, SignedContributionAndProof, Slot, SyncCommitteeContribution,
-    SyncSelectionProof,
+    AggregateAndProof, Attestation, AttestationBase, AttestationData, AttestationElectra,
+    Checkpoint, Domain, Epoch, EthSpec, ForkName, Hash256, MainnetEthSpec, SelectionProof,
+    SignedAggregateAndProof, SignedContributionAndProof, SignedRoot, Slot,
+    SyncCommitteeContribution, SyncSelectionProof,
 };
 use validator_store::{ContributionToSign, ValidatorStore};
 
@@ -87,13 +88,18 @@ struct AggregatorCommitteeFixture {
 
 impl AggregatorCommitteeFixture {
     fn new(validator_count: usize) -> Self {
+        Self::new_with_options(validator_count, HarnessOptions::default())
+    }
+
+    fn new_with_options(validator_count: usize, options: HarnessOptions) -> Self {
         let setup = create_committee_setup(
             &COMMITTEE_OPERATOR_IDS,
             validator_count,
             STARTING_VALIDATOR_INDEX,
         );
         let committee_id = setup.cluster.committee_id();
-        let harness = ValidatorStoreTestHarness::new(vec![setup], OUR_OPERATOR_ID);
+        let harness =
+            ValidatorStoreTestHarness::new_with_options(vec![setup], OUR_OPERATOR_ID, options);
         Self {
             harness,
             committee_id,
@@ -523,6 +529,106 @@ async fn decided_worklist_is_signed_without_any_callback() {
         "both object classes must be signed without either callback firing"
     );
     assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
+}
+
+/// Gloas and Electra attestations can have identical SSZ bytes while merkleizing differently.
+/// The decided version must therefore select the Gloas progressive shape before the aggregate
+/// signing root is computed. Decode success alone cannot detect the wrong shape.
+#[tokio::test(flavor = "multi_thread")]
+async fn gloas_decided_aggregate_uses_progressive_signing_root() {
+    // Arrange: serialize an Electra-shaped attestation, then stamp the decided value as Gloas.
+    // EIP-7688 makes these bytes valid under both shapes, so only the resulting root distinguishes
+    // the correct Gloas decode from the old Electra fallback.
+    let fixture = AggregatorCommitteeFixture::new_with_options(
+        SINGLE_VALIDATOR_COUNT,
+        HarnessOptions {
+            spec: gloas_at_genesis_spec(),
+            ..Default::default()
+        },
+    );
+    let validator_index = fixture.validator_index(SOLE_VALIDATOR_IDX);
+
+    let mut aggregation_bits =
+        ssz_types::BitList::with_capacity(128).expect("aggregation bitlist should be valid");
+    aggregation_bits
+        .set(0, true)
+        .expect("aggregation bit should be in bounds");
+    let mut committee_bits = BitVector::default();
+    committee_bits
+        .set(5, true)
+        .expect("committee bit should be in bounds");
+    let serialized_attestation = AttestationElectra::<MainnetEthSpec> {
+        aggregation_bits,
+        data: AttestationData {
+            slot: Slot::new(TEST_SLOT),
+            index: BEACON_COMMITTEE_INDEX,
+            beacon_block_root: Hash256::zero(),
+            source: Checkpoint::default(),
+            target: Checkpoint::default(),
+        },
+        signature: AggregateSignature::infinity(),
+        committee_bits,
+    }
+    .as_ssz_bytes();
+
+    let decided = fixture.seed_decided_value(AggregatorCommitteeConsensusData {
+        version: DataVersion::from(ForkName::Gloas),
+        aggregators: VariableList::new(vec![assigned(validator_index, BEACON_COMMITTEE_INDEX)])
+            .expect("aggregator list should be valid"),
+        aggregator_committee_indexes: VariableList::new(vec![BEACON_COMMITTEE_INDEX])
+            .expect("committee index list should be valid"),
+        aggregated_attestations: VariableList::new(vec![
+            VariableList::new(serialized_attestation.clone())
+                .expect("attestation bytes should fit"),
+        ])
+        .expect("aggregated attestation list should be valid"),
+        contributors: VariableList::new(vec![]).expect("empty contributor list should be valid"),
+        sync_committee_contributions: VariableList::new(vec![])
+            .expect("empty contribution list should be valid"),
+    });
+
+    let slot = Slot::new(TEST_SLOT);
+    let epoch = slot.epoch(MainnetEthSpec::slots_per_epoch());
+    let domain = fixture.harness.spec.get_domain(
+        epoch,
+        Domain::AggregateAndProof,
+        &fixture.harness.spec.fork_at_epoch(epoch),
+        fixture.harness.genesis_validators_root,
+    );
+
+    let gloas_attestation = DataVersion::from(ForkName::Gloas)
+        .decode_attestation::<MainnetEthSpec>(&serialized_attestation)
+        .expect("Gloas must decode the serialization-compatible bytes");
+    let electra_attestation = DataVersion::from(ForkName::Electra)
+        .decode_attestation::<MainnetEthSpec>(&serialized_attestation)
+        .expect("Electra must decode the same bytes");
+    assert!(matches!(&gloas_attestation, Attestation::Gloas(_)));
+    assert!(matches!(&electra_attestation, Attestation::Electra(_)));
+
+    let expected_gloas_root = AggregateAndProof::from_attestation(
+        validator_index.0 as u64,
+        gloas_attestation,
+        SelectionProof::from(Signature::empty()),
+    )
+    .signing_root(domain);
+    let wrong_electra_root = AggregateAndProof::from_attestation(
+        validator_index.0 as u64,
+        electra_attestation,
+        SelectionProof::from(Signature::empty()),
+    )
+    .signing_root(domain);
+    assert_ne!(
+        expected_gloas_root, wrong_electra_root,
+        "the fixture must distinguish progressive and positional merkleization"
+    );
+
+    // Assert: the detached execution submitted the Gloas root, not the byte-compatible Electra
+    // root that the old two-shape decoder would have produced.
+    assert_captured_calls_settle_at(&fixture.harness, 1).await;
+    let calls = committee_calls(&fixture.harness);
+    assert_batch_identity(&calls, 1, decided.hash());
+    assert_eq!(calls[0].signing_root, expected_gloas_root);
+    assert_ne!(calls[0].signing_root, wrong_electra_root);
 }
 
 /// Republishing assignments for a slot must not register a second execution.
